@@ -1,8 +1,8 @@
-# 🍳 AI Kitchen Scout: Personalized Recipe Recommendation System
+# AI Kitchen Scout: Personalized Recipe Recommendation System
 
 A sophisticated, data-driven recommendation engine built with **Python**, **Pandas**, and **Scikit-learn**. This system leverages the Food.com (GeniusKitchen) dataset, featuring over 180k recipes and 700k user interactions. It utilizes a hybrid approach to suggest meals based on ingredient similarity, user ratings, and nutritional constraints.
 
-## 🚀 Key Features
+## Key Features
 
 * **Hybrid Recommendation Engine**: Combines **Content-Based Filtering** (TF-IDF Vectorization & Cosine Similarity) with **Collaborative Filtering** (Average User Ratings) to rank suggestions.
 * **"Pantry Mode" Search**: Allows users to input available ingredients to find matching recipes using vector space modeling.
@@ -12,7 +12,7 @@ A sophisticated, data-driven recommendation engine built with **Python**, **Pand
 
 
 
-## 🛠️ Technical Stack
+## Technical Stack
 
 * **Language**: Python 3.9+
 * **Data Processing**: Pandas, NumPy
@@ -20,7 +20,7 @@ A sophisticated, data-driven recommendation engine built with **Python**, **Pand
 * **Frontend**: Streamlit
 * **Version Control**: Git
 
-## 📂 Project Structure
+## Project Structure
 
 ```text
 recipe-recommender/
