@@ -1,0 +1,25 @@
+Installation and Setup
+
+1. Clone the Repository
+Open your terminal and run the following commands to download the project and enter the directory:
+git clone https://github.com/YOUR_USERNAME/recipe-recommender.git
+cd recipe-recommender
+
+2. Environment Setup
+Create a virtual environment to isolate your project dependencies and activate it:
+python -m venv venv
+# Activate on Mac or Linux
+source venv/bin/activate
+# Activate on Windows
+venv\Scripts\activate
+pip install -r requirements.txt
+
+3. Data Acquisition
+Because the Food.com dataset is large, it must be added manually to your local project folder:
+Download RAW_recipes.csv and RAW_interactions.csv from the Kaggle dataset link. Ensure you are in the root recipe-recommender folder.
+Create a data directory: mkdir data
+Move the downloaded CSV files into the /data folder.
+
+4. Run the Application
+Launch the interactive interface using Streamlit:
+streamlit run src/app.py
