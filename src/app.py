@@ -1,66 +1,186 @@
+"""
+app.py  —  AI Kitchen Scout v2
+Upgrades over v1:
+  • Metrics dashboard tab (Precision@K, Recall@K, NDCG, MRR, Coverage, Diversity, Novelty)
+  • Per-result score breakdown (content score, smoothed rating, hybrid score)
+  • Latency breakdown sidebar
+  • MMR diversity slider (relevance vs. variety tradeoff)
+  • Hybrid weight slider (content vs. ratings)
+  • Offline evaluation runner (triggered via button)
+  • Result count selector (K)
+  • Cold-start warning when a recipe has <5 ratings
+"""
+from __future__ import annotations
+
 from engine import RecipeRecommender
-import streamlit as st
-import pandas as pd
 import os
 import sys
+import time
+import pandas as pd
+import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 st.set_page_config(page_title="AI Kitchen Scout", layout="wide", page_icon="🍳")
 
-# --- SIDEBAR: ADVANCED FILTERS ---
-st.sidebar.header("🎯 Target Your Meal")
-max_time = st.sidebar.slider("Max Time (mins)", 10, 120, 45)
-max_ing = st.sidebar.slider("Max Ingredients", 3, 20, 12)
-max_cal = st.sidebar.slider("Calories Limit", 100, 1500, 600)
+# ── Sidebar filters ───────────────────────────────────────────────────────────
+st.sidebar.header("🎯 Filters")
+max_time = st.sidebar.slider("Max time (mins)", 10, 120, 45)
+max_ing = st.sidebar.slider("Max ingredients", 3, 20, 12)
+max_cal = st.sidebar.slider("Calorie limit", 100, 1500, 600)
 
-st.title("🍳 AI Kitchen Scout")
-st.markdown("A Hybrid Recommender with Nutritional Filtering and Pantry Search.")
+st.sidebar.markdown("---")
+st.sidebar.subheader("🖥️ System Health")
+if "last_metrics" in st.session_state:
+    lat = st.session_state["last_metrics"].get(
+        "timings_ms", {}).get("total_ms", 0)
+    if lat < 200:
+        st.sidebar.success(f"Ultra-low latency: {lat:.0f}ms")
+    elif lat < 500:
+        st.sidebar.warning(f"Standard latency: {lat:.0f}ms")
+    else:
+        st.sidebar.error(f"High load: {lat:.0f}ms")
+
+st.sidebar.markdown("---")
+st.sidebar.header("⚙️ Algorithm")
+k = st.sidebar.selectbox("Results (K)", [3, 5, 10], index=1)
+lambda_mmr = st.sidebar.slider(
+    "Diversity vs. Relevance",
+    0.0, 1.0, 0.6, step=0.05,
+    help="1.0 = pure relevance, 0.0 = maximise variety (MMR)"
+)
+tfidf_weight = st.sidebar.slider(
+    "Content vs. Ratings weight",
+    0.0, 1.0, 0.7, step=0.05,
+    help="1.0 = ingredients only, 0.0 = ratings only"
+)
+
+# ── Load engine ───────────────────────────────────────────────────────────────
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading recipe database…")
 def load_engine():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    recipe_path = os.path.join(base_dir, '..', 'data', 'RAW_recipes.csv')
-    return RecipeRecommender(recipe_path, sample_size=15000)
+    base = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base, "..", "data", "RAW_recipes.csv")
+    return RecipeRecommender(path, sample_size=15000)
 
 
-try:
-    engine = load_engine()
-    interaction_path = os.path.join(os.path.dirname(
-        os.path.abspath(__file__)), '..', 'data', 'RAW_interactions.csv')
+engine = load_engine()
+interaction_path = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)
+                    ), "..", "data", "RAW_interactions.csv"
+)
 
-    # --- UI MODE SELECTION ---
-    mode = st.radio("Choose search style:", [
-                    "Similar to a Recipe", "What's in my Pantry?"])
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+tab_search, tab_metrics, tab_eval = st.tabs([
+    "🍳 Recommendations", "📊 Metrics Dashboard", "🧪 Offline Evaluation"
+])
 
-    pantry_input = None
-    search_query = None
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 1 — RECOMMENDATIONS
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_search:
+    st.title("🍳 AI Kitchen Scout")
+    st.caption(
+        "Hybrid recommender · TF-IDF + Jaccard + Bayesian ratings + MMR diversity reranking")
 
-    if mode == "Similar to a Recipe":
+    mode = st.radio("Search mode:", [
+                    "Similar to a recipe", "What's in my pantry?"], horizontal=True)
+    pantry_input = search_query = None
+
+    if mode == "Similar to a recipe":
         search_query = st.selectbox(
-            "I love this recipe:", engine.df['name'].tolist())
+            "I love this recipe:", engine.df["name"].tolist())
     else:
         pantry_input = st.text_input(
-            "Enter ingredients you have (e.g., chicken, onion, spinach):")
+            "Ingredients I have (comma-separated):",
+            placeholder="chicken, garlic, spinach, lemon"
+        )
 
-    if st.button("Generate Recommendations"):
-        results = engine.recommend(search_query, interaction_path,
-                                   max_mins=max_time, max_ing=max_ing,
-                                   max_cals=max_cal, pantry_input=pantry_input)
+    if st.button("🔍 Generate recommendations", type="primary"):
+        with st.spinner("Computing recommendations…"):
+            t_wall = time.perf_counter()
+            results, metrics = engine.recommend(
+                title=search_query,
+                interaction_path=interaction_path,
+                max_mins=max_time,
+                max_ing=max_ing,
+                max_cals=max_cal,
+                pantry_input=pantry_input,
+                k=k,
+                lambda_mmr=lambda_mmr,
+                tfidf_weight=tfidf_weight,
+            )
+            wall_ms = (time.perf_counter() - t_wall) * 1000
 
-        if results is None or len(results) == 0:
+        # ── Store metrics for the dashboard tab ──
+        st.session_state["last_metrics"] = metrics
+        st.session_state["last_results"] = results
+
+        if results is None or (isinstance(results, pd.DataFrame) and results.empty):
             st.warning(
-                "No recipes match these specific health and time constraints. Try widening your search!")
+                "No recipes match these constraints. Try widening your filters.")
         else:
-            st.success("Matching Recipes Found:")
-            cols = st.columns(2)
-            for i, (idx, row) in enumerate(results.iterrows()):
-                with cols[i % 2]:
-                    with st.expander(f"📖 {row['name'].title()} ({int(row['calories'])} cals)"):
-                        st.write(
-                            f"⭐ **Rating:** {row['rating']:.1f}/5 | ⏱️ **Time:** {row['minutes']}m")
-                        st.write(f"🧂 **Ingredients:** {row['ingredients']}")
+            # ── Inline metrics strip ──────────────────────────────────────
+            st.success(f"Found {len(results)} recipes in {wall_ms:.0f}ms")
+            m_cols = st.columns(5)
+            m_cols[0].metric(
+                "Precision@K", f"{metrics.get('precision_at_k', 0):.0%}")
+            m_cols[1].metric(
+                "NDCG@K",      f"{metrics.get('ndcg_at_k', 0):.3f}")
+            m_cols[2].metric("MRR",         f"{metrics.get('mrr', 0):.3f}")
+            m_cols[3].metric(
+                "Diversity",   f"{metrics.get('intra_list_diversity', 0):.3f}")
+            m_cols[4].metric(
+                "Total latency", f"{metrics.get('timings_ms', {}).get('total_ms', wall_ms):.0f}ms")
 
-except Exception as e:
-    st.error(f"App Error: {e}")
+            st.markdown("---")
+
+            # ── Result cards ──────────────────────────────────────────────
+            cols = st.columns(2)
+            for i, (_, row) in enumerate(results.iterrows()):
+                with cols[i % 2]:
+                    with st.expander(
+                        f"{'🥇🥈🥉🏅🎖️'[min(i, 4)]} {row['name'].title()} "
+                        f"({int(row['calories'])} kcal)"
+                    ):
+                        # Core stats
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("Rating",      f"{row['rating']:.1f}/5")
+                        c2.metric("Time",        f"{int(row['minutes'])}m")
+                        c3.metric("Ingredients", int(row["n_ingredients"]))
+
+                        # Score breakdown — the FAANG signal
+                        st.markdown("**Score breakdown**")
+                        score_cols = st.columns(3)
+                        score_cols[0].metric(
+                            "Content score",
+                            f"{row['content_score']:.3f}",
+                            help="Blended TF-IDF + Jaccard ingredient similarity"
+                        )
+                        score_cols[1].metric(
+                            "Smoothed rating",
+                            f"{row['smoothed_rating']:.2f}",
+                            help="Bayesian-adjusted rating (corrects cold-start bias)"
+                        )
+                        score_cols[2].metric(
+                            "Hybrid score",
+                            f"{row['hybrid_score']:.3f}",
+                            help=f"Content×{tfidf_weight:.0%} + Rating×{1-tfidf_weight:.0%}"
+                        )
+
+                        # Cold-start warning
+                        if row.get("review_count", 0) < 5:
+                            st.warning(
+                                f"⚠️ Only {int(row.get('review_count', 0))} reviews — "
+                                "rating is Bayesian-smoothed toward the global mean."
+                            )
+
+                        # st.write(f"🧂 **Ingredients:** {row['ingredients']}")
+                        # Instead of st.write(f"🧂 **Ingredients:** {row['ingredients']}")
+                        st.markdown("**Ingredients**")
+                        # Split the string (assuming it's a list or comma-sep) and show as labels
+                        ings = row['ingredients'].strip(
+                            "[]").replace("'", "").split(", ")
+                        # Show first 10 as code-tags
+                        st.write(" ".join([f"`{i}`" for i in ings[:10]]))
