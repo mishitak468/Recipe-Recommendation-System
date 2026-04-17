@@ -1,15 +1,3 @@
-"""
-engine.py  —  RecipeRecommender v2
-Upgrades over v1:
-  • Precision@K, Recall@K, NDCG@K, MRR, Coverage, Diversity, Novelty
-  • Bayesian-smoothed ratings (eliminates cold-start bias for low-review recipes)
-  • Ingredient-level Jaccard similarity (second retrieval signal alongside TF-IDF)
-  • Intra-list diversity reranking (MMR — Maximal Marginal Relevance)
-  • Cold-start fallback (genre/tag based when no interactions exist)
-  • Latency instrumentation per stage
-  • Full metrics_report() method returning a dict (easy to surface in app.py)
-"""
-
 from __future__ import annotations
 import ast
 import time
@@ -24,9 +12,7 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 def _parse_list(x: str) -> list:
     try:
@@ -58,10 +44,7 @@ def _reciprocal_rank(relevance: list) -> float:
     return 0.0
 
 
-# ---------------------------------------------------------------------------
 # MMR reranking
-# ---------------------------------------------------------------------------
-
 def _mmr_rerank(
     candidates_df: pd.DataFrame,
     tfidf_matrix,
@@ -103,10 +86,7 @@ def _mmr_rerank(
     return selected
 
 
-# ---------------------------------------------------------------------------
 # Main recommender
-# ---------------------------------------------------------------------------
-
 class RecipeRecommender:
     def __init__(self, recipe_path: str, sample_size: int = 15000):
         t0 = time.perf_counter()
@@ -126,7 +106,7 @@ class RecipeRecommender:
             lambda x: _parse_list(x)[0] if _parse_list(x) else 0
         )
 
-        # --- TF-IDF (content signal 1) ---
+        # TF-IDF
         self.tfidf = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
         self.tfidf_matrix = self.tfidf.fit_transform(
             self.df["clean_ingredients"])
@@ -135,16 +115,14 @@ class RecipeRecommender:
         self.indices = pd.Series(
             self.df.index, index=self.df["name"]).drop_duplicates()
 
-        # --- Tracking for coverage / novelty ---
+        # Tracking for coverage
         self._recommendation_counts = np.zeros(len(self.df))
 
         elapsed = (time.perf_counter() - t0) * 1000
         logger.info(
             f"RecipeRecommender loaded {len(self.df)} recipes in {elapsed:.1f}ms")
 
-    # ------------------------------------------------------------------
     # Retrieval helpers
-    # ------------------------------------------------------------------
 
     def _tfidf_sim_scores(self, title: str) -> np.ndarray:
         idx = self.indices[title]
@@ -173,10 +151,7 @@ class RecipeRecommender:
             axis=1,
         )
 
-    # ------------------------------------------------------------------
     # Core recommend
-    # ------------------------------------------------------------------
-
     def recommend(
         self,
         title: str | None,
@@ -197,7 +172,7 @@ class RecipeRecommender:
         timings: dict[str, float] = {}
         stage = time.perf_counter()
 
-        # ── 1. Similarity scores ──────────────────────────────────────────
+        # Similarity scores
         query_set: set = set()
 
         if pantry_input:
@@ -217,7 +192,7 @@ class RecipeRecommender:
         content_scores = alpha * tfidf_scores + (1 - alpha) * jaccard_scores
         timings["retrieval_ms"] = (time.perf_counter() - stage) * 1000
 
-        # ── 2. Load interactions + Bayesian ratings ───────────────────────
+        # Load interactions + Bayesian ratings
         stage = time.perf_counter()
         interactions = pd.read_csv(interaction_path)
         agg = interactions.groupby("recipe_id")["rating"].agg(
@@ -230,7 +205,7 @@ class RecipeRecommender:
         ).fillna({"rating": global_mean, "review_count": 0})
         timings["ratings_load_ms"] = (time.perf_counter() - stage) * 1000
 
-        # ── 3. Hybrid score with Bayesian smoothing ───────────────────────
+        # Hybrid score with Bayesian smoothing
         stage = time.perf_counter()
         candidates["content_score"] = content_scores
         candidates["smoothed_rating"] = self._bayesian_smooth_ratings(
@@ -241,7 +216,7 @@ class RecipeRecommender:
         )
         timings["scoring_ms"] = (time.perf_counter() - stage) * 1000
 
-        # ── 4. Hard filters ───────────────────────────────────────────────
+        # Hard filters
         filtered = candidates[
             (candidates["minutes"] <= max_mins)
             & (candidates["n_ingredients"] <= max_ing)
@@ -255,10 +230,10 @@ class RecipeRecommender:
         if filtered.empty:
             return pd.DataFrame(), {}
 
-        # ── 5. MMR reranking ─────────────────────────────────────────────
+        # MMR reranking
         stage = time.perf_counter()
         filtered = filtered.reset_index(drop=True)
-        # Only run MMR on top-50 to keep it fast
+        # top-50 to keep it fast
         pool = filtered.nlargest(min(50, len(filtered)), "hybrid_score")
         pool_indices = list(pool.index)
         selected_indices = _mmr_rerank(
@@ -268,12 +243,12 @@ class RecipeRecommender:
         timings["mmr_ms"] = (time.perf_counter() - stage) * 1000
         timings["total_ms"] = sum(timings.values())
 
-        # ── 6. Update popularity tracking ─────────────────────────────────
+        # Update popularity tracking
         for orig_idx in results["id"].values:
             mask = self.df["id"] == orig_idx
             self._recommendation_counts[mask] += 1
 
-        # ── 7. Compute metrics ────────────────────────────────────────────
+        # Compute
         metrics = self._compute_metrics(
             results=results,
             filtered_pool=filtered,
@@ -284,10 +259,7 @@ class RecipeRecommender:
 
         return results, metrics
 
-    # ------------------------------------------------------------------
     # Metrics
-    # ------------------------------------------------------------------
-
     def _compute_metrics(
         self,
         results: pd.DataFrame,
@@ -299,8 +271,8 @@ class RecipeRecommender:
         if results.empty:
             return {}
 
-        # --- Precision@K & Recall@K ---
-        # A result is "relevant" if its rating >= 4.0 (common threshold)
+        # Precision@K & Recall@K
+        # "relevant" if its rating >= 4.0
         RELEVANCE_THRESHOLD = 4.0
         relevance_flags = (results["rating"] >=
                            RELEVANCE_THRESHOLD).astype(int).tolist()
@@ -313,21 +285,18 @@ class RecipeRecommender:
             if total_relevant_in_pool > 0 else 0.0
         )
 
-        # --- NDCG@K ---
-        # Use normalised rating as graded relevance (0–1)
+        # NDCG@K
         graded = (results["rating"] / 5.0).tolist()
         ndcg = _ndcg_at_k(graded, k)
 
-        # --- MRR ---
+        # MRR
         mrr = _reciprocal_rank(relevance_flags)
 
-        # --- Coverage ---
-        # What fraction of the catalogue can this system surface?
+        # Coverage
         n_recommended_ever = int((self._recommendation_counts > 0).sum())
         catalogue_coverage = n_recommended_ever / len(self.df)
 
-        # --- Intra-list Diversity (ILD) ---
-        # Average pairwise cosine DISSIMILARITY among returned items
+        # ILD
         result_indices = list(results.index)
         if len(result_indices) > 1:
             pairwise_sims = []
@@ -342,13 +311,11 @@ class RecipeRecommender:
         else:
             ild = 0.0
 
-        # --- Novelty ---
-        # Lower popularity → higher novelty (log-scaled)
+        # Lower popularity = higher novelty
         counts = self._recommendation_counts[result_indices]
-        # Add 1 to avoid log(0)
         novelty = float(np.mean(-np.log2((counts + 1) / (len(self.df) + 1))))
 
-        # --- Filter pass-rate ---
+        # Filter pass-rate
         filter_pass_rate = len(filtered_pool) / max(len(candidates), 1)
 
         return {
@@ -365,9 +332,7 @@ class RecipeRecommender:
             "timings_ms": {k: round(v, 1) for k, v in timings.items()},
         }
 
-    # ------------------------------------------------------------------
-    # Offline evaluation harness (call once, log to README/report)
-    # ------------------------------------------------------------------
+    # Offline evaluation harness
 
     def evaluate_offline(
         self, interaction_path: str, n_test_users: int = 100, k: int = 5
