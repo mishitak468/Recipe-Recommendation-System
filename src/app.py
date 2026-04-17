@@ -1,15 +1,4 @@
-"""
-app.py  —  AI Kitchen Scout v2
-Upgrades over v1:
-  • Metrics dashboard tab (Precision@K, Recall@K, NDCG, MRR, Coverage, Diversity, Novelty)
-  • Per-result score breakdown (content score, smoothed rating, hybrid score)
-  • Latency breakdown sidebar
-  • MMR diversity slider (relevance vs. variety tradeoff)
-  • Hybrid weight slider (content vs. ratings)
-  • Offline evaluation runner (triggered via button)
-  • Result count selector (K)
-  • Cold-start warning when a recipe has <5 ratings
-"""
+
 from __future__ import annotations
 
 from engine import RecipeRecommender
@@ -23,7 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 st.set_page_config(page_title="AI Kitchen Scout", layout="wide", page_icon="🍳")
 
-# ── Sidebar filters ───────────────────────────────────────────────────────────
+# Sidebars
 st.sidebar.header("🎯 Filters")
 max_time = st.sidebar.slider("Max time (mins)", 10, 120, 45)
 max_ing = st.sidebar.slider("Max ingredients", 3, 20, 12)
@@ -55,7 +44,7 @@ tfidf_weight = st.sidebar.slider(
     help="1.0 = ingredients only, 0.0 = ratings only"
 )
 
-# ── Load engine ───────────────────────────────────────────────────────────────
+# Load engine
 
 
 @st.cache_resource(show_spinner="Loading recipe database…")
@@ -71,14 +60,12 @@ interaction_path = os.path.join(
                     ), "..", "data", "RAW_interactions.csv"
 )
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# Tabs
 tab_search, tab_metrics, tab_eval = st.tabs([
     "🍳 Recommendations", "📊 Metrics Dashboard", "🧪 Offline Evaluation"
 ])
 
-# ═════════════════════════════════════════════════════════════════════════════
 # TAB 1 — RECOMMENDATIONS
-# ═════════════════════════════════════════════════════════════════════════════
 with tab_search:
     st.title("🍳 AI Kitchen Scout")
     st.caption(
@@ -113,7 +100,7 @@ with tab_search:
             )
             wall_ms = (time.perf_counter() - t_wall) * 1000
 
-        # ── Store metrics for the dashboard tab ──
+        # Store metrics for the dashboard
         st.session_state["last_metrics"] = metrics
         st.session_state["last_results"] = results
 
@@ -121,7 +108,7 @@ with tab_search:
             st.warning(
                 "No recipes match these constraints. Try widening your filters.")
         else:
-            # ── Inline metrics strip ──────────────────────────────────────
+            # Inline metrics
             st.success(f"Found {len(results)} recipes in {wall_ms:.0f}ms")
             m_cols = st.columns(5)
             m_cols[0].metric(
@@ -136,7 +123,7 @@ with tab_search:
 
             st.markdown("---")
 
-            # ── Result cards ──────────────────────────────────────────────
+            # Result cards
             cols = st.columns(2)
             for i, (_, row) in enumerate(results.iterrows()):
                 with cols[i % 2]:
@@ -177,9 +164,8 @@ with tab_search:
                             )
 
                         # st.write(f"🧂 **Ingredients:** {row['ingredients']}")
-                        # Instead of st.write(f"🧂 **Ingredients:** {row['ingredients']}")
                         st.markdown("**Ingredients**")
-                        # Split the string (assuming it's a list or comma-sep) and show as labels
+                        # Split the string and show as labels
                         ings = row['ingredients'].strip(
                             "[]").replace("'", "").split(", ")
                         # Show first 10 as code-tags
