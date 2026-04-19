@@ -170,3 +170,137 @@ with tab_search:
                             "[]").replace("'", "").split(", ")
                         # Show first 10 as code-tags
                         st.write(" ".join([f"`{i}`" for i in ings[:10]]))
+
+
+# TAB 2 — METRICS DASHBOARD
+with tab_metrics:
+    st.header("📊 Metrics dashboard")
+    st.caption("All metrics are computed live on each recommendation call.")
+
+    metrics = st.session_state.get("last_metrics", {})
+
+    if not metrics:
+        st.info("Run a recommendation in the Search tab to see live metrics here.")
+    else:
+        # Retrieval quality
+        st.subheader("Retrieval quality")
+        q_cols = st.columns(4)
+        q_cols[0].metric(
+            "Precision@K",
+            f"{metrics['precision_at_k']:.2%}",
+            help="Fraction of top-K results rated ≥ 4.0 stars"
+        )
+        q_cols[1].metric(
+            "Recall@K",
+            f"{metrics['recall_at_k']:.2%}",
+            help="Fraction of all good recipes in the filtered pool that appear in top-K"
+        )
+        q_cols[2].metric(
+            "NDCG@K",
+            f"{metrics['ndcg_at_k']:.4f}",
+            help="Normalised Discounted Cumulative Gain — measures ranking quality"
+        )
+        q_cols[3].metric(
+            "MRR",
+            f"{metrics['mrr']:.4f}",
+            help="Mean Reciprocal Rank — where does the first good recipe appear?"
+        )
+
+        st.markdown("---")
+
+        # Beyond-accuracy metrics
+        st.subheader("Beyond-accuracy metrics")
+        ba_cols = st.columns(3)
+        ba_cols[0].metric(
+            "Intra-list diversity",
+            f"{metrics['intra_list_diversity']:.4f}",
+            help="1 = maximally diverse results, 0 = identical ingredients. Controlled by MMR slider."
+        )
+        ba_cols[1].metric(
+            "Novelty",
+            f"{metrics['novelty']:.4f}",
+            help="Higher = less popular (long-tail) recommendations"
+        )
+        ba_cols[2].metric(
+            "Catalogue coverage",
+            f"{metrics['catalogue_coverage']:.2%}",
+            help="Cumulative fraction of the recipe catalogue ever recommended this session"
+        )
+
+        st.markdown("---")
+
+        #  Pipeline latency breakdown
+        st.subheader("Pipeline latency breakdown")
+        timings = metrics.get("timings_ms", {})
+        if timings:
+            latency_df = pd.DataFrame([
+                {"Stage": "Retrieval (TF-IDF + Jaccard)",
+                                      "Latency (ms)": timings.get("retrieval_ms", 0)},
+                {"Stage": "Ratings load (Pandas CSV)",    "Latency (ms)": timings.get(
+                    "ratings_load_ms", 0)},
+                {"Stage": "Hybrid scoring + Bayesian",
+                    "Latency (ms)": timings.get("scoring_ms", 0)},
+                {"Stage": "MMR reranking",
+                    "Latency (ms)": timings.get("mmr_ms", 0)},
+            ])
+            st.bar_chart(latency_df.set_index(
+                "Stage"), use_container_width=True)
+            st.dataframe(latency_df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+
+        # Filter stats
+        st.subheader("Filter statistics")
+        st.metric(
+            "Filter pass rate",
+            f"{metrics['filter_pass_rate']:.1%}",
+            help="Fraction of candidates surviving the time/ingredients/calorie filters"
+        )
+
+        # Raw metrics JSON (for debugging / README)
+        with st.expander("Raw metrics JSON"):
+            st.json(metrics)
+
+
+# TAB 3 — OFFLINE EVALUATION
+with tab_eval:
+    st.header("🧪 Offline leave-one-out evaluation")
+    st.markdown(
+        "Simulates recommending for **N test users** by hiding their last rated recipe, "
+        "running the engine, and checking if the held-out item appears in the top-K results. "
+        "This produces macro-averaged metrics across real user behaviour."
+    )
+
+    n_test = st.slider("Number of test users", 10, 200, 50, step=10)
+    eval_k = st.selectbox("Evaluation K", [5, 10, 20], key="eval_k")
+
+    if st.button("▶ Run offline evaluation", type="primary"):
+        with st.spinner(f"Evaluating on {n_test} users… (may take ~30s)"):
+            eval_metrics = engine.evaluate_offline(
+                interaction_path=interaction_path,
+                n_test_users=n_test,
+                k=eval_k,
+            )
+
+        if not eval_metrics:
+            st.error("Not enough user data for evaluation.")
+        else:
+            st.success(f"Evaluated {eval_metrics['n_evaluated']} users")
+            e_cols = st.columns(5)
+            e_cols[0].metric("Macro Precision@K",
+                             f"{eval_metrics['macro_precision_at_k']:.2%}")
+            e_cols[1].metric("Macro Recall@K",
+                             f"{eval_metrics['macro_recall_at_k']:.2%}")
+            e_cols[2].metric("Macro NDCG@K",
+                             f"{eval_metrics['macro_ndcg_at_k']:.4f}")
+            e_cols[3].metric(
+                "Macro MRR",         f"{eval_metrics['macro_mrr']:.4f}")
+            e_cols[4].metric("Hit Rate@K",
+                             f"{eval_metrics['hit_rate_at_k']:.2%}")
+
+            st.info(
+                "These are your README headline numbers. "
+                "Put the best ones on your resume with the dataset name and K value."
+            )
+            with st.expander("Full eval output"):
+                st.json(eval_metrics)
